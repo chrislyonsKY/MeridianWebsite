@@ -4,7 +4,8 @@ import { storage } from "./storage";
 import { api } from "@shared/routes";
 import { z } from "zod";
 import RSSParser from "rss-parser";
-import { setupAuth, registerAuthRoutes } from "./replit_integrations/auth";
+import nodemailer from "nodemailer";
+import { setupAuth, registerAuthRoutes, setupOAuth } from "./replit_integrations/auth";
 import { runPipeline, startAutoRefresh } from "./pipeline";
 
 const localNewsParser = new RSSParser({
@@ -17,9 +18,9 @@ export async function registerRoutes(
   app: Express
 ): Promise<Server> {
   
-  // Set up authentication before other routes
   await setupAuth(app);
   registerAuthRoutes(app);
+  setupOAuth(app);
 
   app.get("/api/config/map", (_req, res) => {
     res.json({ esriApiKey: process.env.ESRI_API_KEY || "" });
@@ -106,6 +107,79 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/stories/search", async (req, res) => {
+    try {
+      const q = req.query.q as string;
+      if (!q || q.trim().length < 2) {
+        return res.json({ stories: [] });
+      }
+      const results = await storage.searchStories(q.trim(), 15);
+      res.json({ stories: results });
+    } catch (err) {
+      console.error("Error searching stories:", err);
+      res.status(500).json({ message: "Failed to search stories" });
+    }
+  });
+
+  app.get("/api/stories/trending", async (req, res) => {
+    try {
+      const limit = req.query.limit ? parseInt(req.query.limit as string) : 8;
+      const results = await storage.getTrendingStories(limit);
+      res.json({ stories: results });
+    } catch (err) {
+      console.error("Error fetching trending stories:", err);
+      res.status(500).json({ message: "Failed to fetch trending stories" });
+    }
+  });
+
+  app.get("/api/stories/:id/related", async (req, res) => {
+    try {
+      const storyId = parseInt(req.params.id);
+      const limit = req.query.limit ? parseInt(req.query.limit as string) : 4;
+      const results = await storage.getRelatedStories(storyId, limit);
+      res.json({ stories: results });
+    } catch (err) {
+      console.error("Error fetching related stories:", err);
+      res.status(500).json({ message: "Failed to fetch related stories" });
+    }
+  });
+
+  app.get("/api/bookmarks", async (req, res) => {
+    try {
+      const userId = (req.session as any)?.userId;
+      if (!userId) return res.status(401).json({ message: "Not authenticated" });
+      const results = await storage.getBookmarks(userId);
+      res.json({ stories: results });
+    } catch (err) {
+      console.error("Error fetching bookmarks:", err);
+      res.status(500).json({ message: "Failed to fetch bookmarks" });
+    }
+  });
+
+  app.post("/api/bookmarks/:storyId", async (req, res) => {
+    try {
+      const userId = (req.session as any)?.userId;
+      if (!userId) return res.status(401).json({ message: "Not authenticated" });
+      const bookmark = await storage.addBookmark(userId, parseInt(req.params.storyId));
+      res.json(bookmark);
+    } catch (err) {
+      console.error("Error adding bookmark:", err);
+      res.status(500).json({ message: "Failed to add bookmark" });
+    }
+  });
+
+  app.delete("/api/bookmarks/:storyId", async (req, res) => {
+    try {
+      const userId = (req.session as any)?.userId;
+      if (!userId) return res.status(401).json({ message: "Not authenticated" });
+      await storage.removeBookmark(userId, parseInt(req.params.storyId));
+      res.json({ success: true });
+    } catch (err) {
+      console.error("Error removing bookmark:", err);
+      res.status(500).json({ message: "Failed to remove bookmark" });
+    }
+  });
+
   app.get(api.stories.get.path, async (req, res) => {
     try {
       const story = await storage.getStory(Number(req.params.id));
@@ -136,6 +210,68 @@ export async function registerRoutes(
     } catch (err) {
       console.error("Pipeline error:", err);
       res.status(500).json({ message: "Failed to trigger pipeline" });
+    }
+  });
+
+  app.post("/api/digest/send-test", async (req, res) => {
+    try {
+      const userId = (req.session as any)?.userId;
+      if (!userId) return res.status(401).json({ message: "Not authenticated" });
+
+      const { email } = req.body;
+      const emailSchema = z.string().email();
+      const parsed = emailSchema.safeParse(email);
+      if (!parsed.success) return res.status(400).json({ message: "Valid email is required" });
+
+      const gmailPassword = process.env.GMAIL_APP_PASSWORD;
+      if (!gmailPassword) return res.status(500).json({ message: "Email service not configured" });
+
+      const trending = await storage.getTrendingStories(5);
+      const appUrl = process.env.REPLIT_DEPLOYMENT_URL || process.env.REPL_SLUG ? `https://${process.env.REPL_SLUG}.${process.env.REPL_OWNER}.repl.co` : `https://${req.get("host")}`;
+
+      const storiesHtml = trending.map((s: any) => `
+        <tr>
+          <td style="padding: 20px 0; border-bottom: 1px solid #e5e7eb;">
+            <span style="display:inline-block;background:#f3f4f6;color:#6b7280;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1px;padding:2px 8px;border-radius:3px;margin-bottom:8px;">${s.topic}</span>
+            <h3 style="margin:8px 0 6px;font-family:Georgia,serif;font-size:18px;line-height:1.3;"><a href="${appUrl}/story/${s.id}" style="color:#111827;text-decoration:none;">${s.headline}</a></h3>
+            <p style="margin:0;color:#6b7280;font-size:14px;line-height:1.5;">${(s.summary || "").slice(0, 150)}...</p>
+            <span style="font-size:12px;color:#9ca3af;margin-top:6px;display:inline-block;">${s.storyArticles?.length || 0} sources</span>
+          </td>
+        </tr>
+      `).join("");
+
+      const html = `
+        <div style="max-width:600px;margin:0 auto;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+          <div style="text-align:center;padding:30px 0;border-bottom:2px solid #111827;">
+            <h1 style="margin:0;font-family:Georgia,serif;font-size:28px;letter-spacing:2px;color:#111827;">THE MERIDIAN</h1>
+            <p style="margin:6px 0 0;color:#6b7280;font-size:13px;text-transform:uppercase;letter-spacing:1px;">Your Daily News Digest</p>
+          </div>
+          <table cellpadding="0" cellspacing="0" border="0" width="100%">
+            <tbody>${storiesHtml}</tbody>
+          </table>
+          <div style="text-align:center;padding:30px 0;border-top:1px solid #e5e7eb;margin-top:20px;">
+            <a href="${appUrl}/feed" style="display:inline-block;background:#111827;color:#fff;padding:12px 28px;text-decoration:none;font-size:14px;font-weight:600;letter-spacing:0.5px;">READ MORE ON THE MERIDIAN</a>
+          </div>
+          <p style="text-align:center;color:#9ca3af;font-size:11px;margin-top:20px;">You received this email because you subscribed to The Meridian digest.</p>
+        </div>
+      `;
+
+      const transporter = nodemailer.createTransport({
+        service: "gmail",
+        auth: { user: "themeridian.news@gmail.com", pass: gmailPassword },
+      });
+
+      await transporter.sendMail({
+        from: '"The Meridian" <themeridian.news@gmail.com>',
+        to: email,
+        subject: `The Meridian Daily Digest — ${new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}`,
+        html,
+      });
+
+      res.json({ success: true, message: "Digest sent successfully" });
+    } catch (err) {
+      console.error("[Digest] Failed to send:", err);
+      res.status(500).json({ message: "Failed to send digest email" });
     }
   });
 

@@ -1,6 +1,6 @@
 import { Link, useLocation } from "wouter";
-import { Compass, Menu, X, User as UserIcon, LogOut, Settings, Sun, Moon, Type, Heart } from "lucide-react";
-import { useState, useEffect, useRef } from "react";
+import { Compass, Menu, X, User as UserIcon, LogOut, Settings, Sun, Moon, Type, Heart, Search, Bookmark, Bell, BellOff, Loader2 } from "lucide-react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useAuth } from "@/hooks/use-auth";
 import { useTheme } from "@/components/ThemeProvider";
 import { Button } from "@/components/ui/button";
@@ -16,8 +16,15 @@ import { AuthModal } from "@/components/AuthModal";
 import { OnboardingModal } from "@/components/OnboardingModal";
 import { EditionSelector, useEdition } from "@/components/EditionSelector";
 
+interface SearchResult {
+  id: number;
+  headline: string;
+  topic: string;
+  summary?: string | null;
+}
+
 export function Navbar() {
-  const [location] = useLocation();
+  const [location, navigate] = useLocation();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const { user, isAuthenticated, logout } = useAuth();
   const { theme, toggleTheme, fontSize, setFontSize } = useTheme();
@@ -27,12 +34,96 @@ export function Navbar() {
   const [showOnboarding, setShowOnboarding] = useState(false);
   const prevAuthRef = useRef(isAuthenticated);
 
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const searchRef = useRef<HTMLDivElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const searchTimerRef = useRef<ReturnType<typeof setTimeout>>();
+
+  const [notificationsEnabled, setNotificationsEnabled] = useState(() => {
+    if (typeof window !== "undefined" && "Notification" in window) {
+      return Notification.permission === "granted" && localStorage.getItem("meridian-notifications") === "true";
+    }
+    return false;
+  });
+
   useEffect(() => {
     if (isAuthenticated && !prevAuthRef.current && user && !user.onboardingCompleted) {
       setShowOnboarding(true);
     }
     prevAuthRef.current = isAuthenticated;
   }, [isAuthenticated, user]);
+
+  useEffect(() => {
+    if (searchOpen && searchInputRef.current) {
+      searchInputRef.current.focus();
+    }
+  }, [searchOpen]);
+
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (searchRef.current && !searchRef.current.contains(e.target as Node)) {
+        setSearchOpen(false);
+        setSearchResults([]);
+      }
+    }
+    function handleEscape(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        setSearchOpen(false);
+        setSearchResults([]);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    document.addEventListener("keydown", handleEscape);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+      document.removeEventListener("keydown", handleEscape);
+    };
+  }, []);
+
+  const handleSearch = useCallback((q: string) => {
+    setSearchQuery(q);
+    if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+    if (q.trim().length < 2) {
+      setSearchResults([]);
+      return;
+    }
+    setSearchLoading(true);
+    searchTimerRef.current = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/stories/search?q=${encodeURIComponent(q.trim())}`, { credentials: "include" });
+        if (res.ok) {
+          const data = await res.json();
+          setSearchResults(data.stories || []);
+        }
+      } catch {
+        setSearchResults([]);
+      } finally {
+        setSearchLoading(false);
+      }
+    }, 300);
+  }, []);
+
+  const toggleNotifications = async () => {
+    if (!("Notification" in window)) return;
+    if (Notification.permission === "granted") {
+      const next = !notificationsEnabled;
+      setNotificationsEnabled(next);
+      localStorage.setItem("meridian-notifications", String(next));
+      if (next) {
+        new Notification("The Meridian", { body: "Notifications enabled. You'll be notified of trending stories.", icon: "/favicon.ico" });
+      }
+    } else if (Notification.permission !== "denied") {
+      const perm = await Notification.requestPermission();
+      if (perm === "granted") {
+        setNotificationsEnabled(true);
+        localStorage.setItem("meridian-notifications", "true");
+        new Notification("The Meridian", { body: "Notifications enabled!", icon: "/favicon.ico" });
+      }
+    }
+  };
 
   const fontSizes = [
     { key: "small" as const, label: "A", ariaLabel: "Small text", size: "0.7rem" },
@@ -107,6 +198,79 @@ export function Navbar() {
                   </button>
                 ))}
               </div>
+              <div ref={searchRef} className="relative">
+                {searchOpen ? (
+                  <div className="flex items-center gap-1">
+                    <div className="relative">
+                      <input
+                        ref={searchInputRef}
+                        type="text"
+                        value={searchQuery}
+                        onChange={(e) => handleSearch(e.target.value)}
+                        placeholder="Search stories..."
+                        className="w-48 h-9 pl-8 pr-3 text-sm bg-muted border border-border rounded-md focus:outline-none focus:ring-1 focus:ring-primary"
+                        data-testid="search-input"
+                      />
+                      <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
+                      {searchLoading && <Loader2 className="absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 animate-spin text-muted-foreground" />}
+                    </div>
+                    <Button variant="ghost" size="icon" className="h-9 w-9" onClick={() => { setSearchOpen(false); setSearchResults([]); setSearchQuery(""); }}>
+                      <X className="h-4 w-4" />
+                    </Button>
+                  </div>
+                ) : (
+                  <Button variant="ghost" size="icon" className="h-9 w-9" onClick={() => setSearchOpen(true)} data-testid="search-toggle">
+                    <Search className="h-4 w-4" />
+                  </Button>
+                )}
+                {searchOpen && searchQuery.length >= 2 && (
+                  <div className="absolute top-full right-0 mt-1 w-80 max-h-80 overflow-y-auto bg-card border border-border rounded-md shadow-lg z-50" data-testid="search-results">
+                    {searchLoading ? (
+                      <div className="p-4 text-center text-sm text-muted-foreground">Searching...</div>
+                    ) : searchResults.length === 0 ? (
+                      <div className="p-4 text-center text-sm text-muted-foreground">No results found</div>
+                    ) : (
+                      searchResults.map((result) => (
+                        <button
+                          key={result.id}
+                          onClick={() => {
+                            navigate(`/story/${result.id}`);
+                            setSearchOpen(false);
+                            setSearchResults([]);
+                            setSearchQuery("");
+                          }}
+                          className="w-full text-left p-3 hover:bg-muted/50 border-b border-border/30 last:border-0 transition-colors"
+                          data-testid={`search-result-item-${result.id}`}
+                        >
+                          <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">{result.topic}</span>
+                          <p className="text-sm font-medium text-foreground line-clamp-2 mt-0.5">{result.headline}</p>
+                        </button>
+                      ))
+                    )}
+                  </div>
+                )}
+              </div>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={toggleNotifications}
+                className="h-9 w-9"
+                data-testid="notification-bell"
+                title={notificationsEnabled ? "Notifications enabled" : "Enable notifications"}
+              >
+                {notificationsEnabled ? (
+                  <Bell className="h-4 w-4 text-primary" />
+                ) : (
+                  <BellOff className="h-4 w-4" />
+                )}
+              </Button>
+              {isAuthenticated && (
+                <Link href="/saved">
+                  <Button variant="ghost" size="icon" className="h-9 w-9" data-testid="link-saved" title="Saved stories">
+                    <Bookmark className="h-4 w-4" />
+                  </Button>
+                </Link>
+              )}
               <Button
                 variant="ghost"
                 size="icon"

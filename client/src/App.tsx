@@ -26,6 +26,7 @@ import ContactPage from "@/pages/ContactPage";
 import AboutPage from "@/pages/AboutPage";
 import ResetPasswordPage from "@/pages/ResetPasswordPage";
 import ConflictMapPage from "@/pages/ConflictMapPage";
+import SavedStoriesPage from "@/pages/SavedStoriesPage";
 
 function Router() {
   return (
@@ -41,6 +42,7 @@ function Router() {
       <Route path="/terms" component={TermsOfServicePage} />
       <Route path="/contact" component={ContactPage} />
       <Route path="/about" component={AboutPage} />
+      <Route path="/saved" component={SavedStoriesPage} />
       <Route path="/auth/reset-password" component={ResetPasswordPage} />
       <Route component={NotFound} />
     </Switch>

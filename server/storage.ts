@@ -4,17 +4,19 @@ import {
   articles,
   stories,
   storyArticles,
+  bookmarks,
   contactSubmissions,
   type Source,
   type Article,
   type Story,
+  type Bookmark,
   type ContactSubmission,
   type InsertSource,
   type InsertArticle,
   type InsertStory,
   type InsertContact,
 } from "@shared/schema";
-import { eq, desc, asc, inArray, count, and } from "drizzle-orm";
+import { eq, desc, asc, inArray, count, and, ilike, or, ne, sql } from "drizzle-orm";
 
 export interface IStorage {
   // Sources
@@ -38,6 +40,17 @@ export interface IStorage {
 
   // Relationships
   linkArticleToStory(storyId: number, articleId: number, sourceSnippet: string): Promise<void>;
+
+  // Bookmarks
+  getBookmarks(userId: string): Promise<any[]>;
+  addBookmark(userId: string, storyId: number): Promise<Bookmark>;
+  removeBookmark(userId: string, storyId: number): Promise<void>;
+  isBookmarked(userId: string, storyId: number): Promise<boolean>;
+
+  // Search & Discovery
+  searchStories(query: string, limit?: number): Promise<any[]>;
+  getTrendingStories(limit?: number): Promise<any[]>;
+  getRelatedStories(storyId: number, limit?: number): Promise<any[]>;
 
   // Contact Submissions
   createContactSubmission(data: InsertContact): Promise<ContactSubmission>;
@@ -202,6 +215,175 @@ export class DatabaseStorage implements IStorage {
       articleId,
       sourceSnippet,
     });
+  }
+
+  async getBookmarks(userId: string): Promise<any[]> {
+    const userBookmarks = await db.select().from(bookmarks)
+      .where(eq(bookmarks.userId, userId))
+      .orderBy(desc(bookmarks.createdAt));
+
+    if (userBookmarks.length === 0) return [];
+
+    const storyIds = userBookmarks.map(b => b.storyId);
+    const fetchedStories = await db.select().from(stories)
+      .where(inArray(stories.id, storyIds));
+
+    const linkedArticles = await db
+      .select({
+        id: storyArticles.id,
+        storyId: storyArticles.storyId,
+        sourceSnippet: storyArticles.sourceSnippet,
+        article: articles,
+        source: sources,
+      })
+      .from(storyArticles)
+      .innerJoin(articles, eq(storyArticles.articleId, articles.id))
+      .innerJoin(sources, eq(articles.sourceId, sources.id))
+      .where(inArray(storyArticles.storyId, storyIds));
+
+    return fetchedStories.map(story => ({
+      ...story,
+      storyArticles: linkedArticles
+        .filter(la => la.storyId === story.id)
+        .map(la => ({ id: la.id, sourceSnippet: la.sourceSnippet, article: { ...la.article, source: la.source } })),
+    }));
+  }
+
+  async addBookmark(userId: string, storyId: number): Promise<Bookmark> {
+    const existing = await db.select().from(bookmarks)
+      .where(and(eq(bookmarks.userId, userId), eq(bookmarks.storyId, storyId)));
+    if (existing.length > 0) return existing[0];
+    const [bookmark] = await db.insert(bookmarks).values({ userId, storyId }).returning();
+    return bookmark;
+  }
+
+  async removeBookmark(userId: string, storyId: number): Promise<void> {
+    await db.delete(bookmarks).where(and(eq(bookmarks.userId, userId), eq(bookmarks.storyId, storyId)));
+  }
+
+  async isBookmarked(userId: string, storyId: number): Promise<boolean> {
+    const result = await db.select().from(bookmarks)
+      .where(and(eq(bookmarks.userId, userId), eq(bookmarks.storyId, storyId)));
+    return result.length > 0;
+  }
+
+  async searchStories(query: string, limit: number = 20): Promise<any[]> {
+    const searchPattern = `%${query}%`;
+    const fetchedStories = await db.select().from(stories)
+      .where(and(
+        eq(stories.status, "published"),
+        or(ilike(stories.headline, searchPattern), ilike(stories.summary, searchPattern))
+      ))
+      .orderBy(desc(stories.publishedAt))
+      .limit(limit);
+
+    if (fetchedStories.length === 0) return [];
+
+    const storyIds = fetchedStories.map(s => s.id);
+    const linkedArticles = await db
+      .select({
+        id: storyArticles.id,
+        storyId: storyArticles.storyId,
+        sourceSnippet: storyArticles.sourceSnippet,
+        article: articles,
+        source: sources,
+      })
+      .from(storyArticles)
+      .innerJoin(articles, eq(storyArticles.articleId, articles.id))
+      .innerJoin(sources, eq(articles.sourceId, sources.id))
+      .where(inArray(storyArticles.storyId, storyIds));
+
+    return fetchedStories.map(story => ({
+      ...story,
+      storyArticles: linkedArticles
+        .filter(la => la.storyId === story.id)
+        .map(la => ({ id: la.id, sourceSnippet: la.sourceSnippet, article: { ...la.article, source: la.source } })),
+    }));
+  }
+
+  async getTrendingStories(limit: number = 10): Promise<any[]> {
+    const cutoff = new Date(Date.now() - 48 * 60 * 60 * 1000);
+    const storySourceCounts = await db
+      .select({
+        storyId: storyArticles.storyId,
+        sourceCount: count(storyArticles.id),
+      })
+      .from(storyArticles)
+      .innerJoin(stories, eq(storyArticles.storyId, stories.id))
+      .where(and(
+        eq(stories.status, "published"),
+      ))
+      .groupBy(storyArticles.storyId)
+      .orderBy(desc(count(storyArticles.id)))
+      .limit(limit);
+
+    if (storySourceCounts.length === 0) return [];
+
+    const storyIds = storySourceCounts.map(s => s.storyId);
+    const fetchedStories = await db.select().from(stories)
+      .where(inArray(stories.id, storyIds));
+
+    const linkedArticles = await db
+      .select({
+        id: storyArticles.id,
+        storyId: storyArticles.storyId,
+        sourceSnippet: storyArticles.sourceSnippet,
+        article: articles,
+        source: sources,
+      })
+      .from(storyArticles)
+      .innerJoin(articles, eq(storyArticles.articleId, articles.id))
+      .innerJoin(sources, eq(articles.sourceId, sources.id))
+      .where(inArray(storyArticles.storyId, storyIds));
+
+    const sourceCountMap = new Map(storySourceCounts.map(s => [s.storyId, Number(s.sourceCount)]));
+
+    return fetchedStories
+      .map(story => ({
+        ...story,
+        sourceCount: sourceCountMap.get(story.id) || 0,
+        storyArticles: linkedArticles
+          .filter(la => la.storyId === story.id)
+          .map(la => ({ id: la.id, sourceSnippet: la.sourceSnippet, article: { ...la.article, source: la.source } })),
+      }))
+      .sort((a, b) => b.sourceCount - a.sourceCount);
+  }
+
+  async getRelatedStories(storyId: number, limit: number = 4): Promise<any[]> {
+    const [story] = await db.select().from(stories).where(eq(stories.id, storyId));
+    if (!story) return [];
+
+    const fetchedStories = await db.select().from(stories)
+      .where(and(
+        eq(stories.status, "published"),
+        eq(stories.topic, story.topic),
+        ne(stories.id, storyId)
+      ))
+      .orderBy(desc(stories.publishedAt))
+      .limit(limit);
+
+    if (fetchedStories.length === 0) return [];
+
+    const storyIds = fetchedStories.map(s => s.id);
+    const linkedArticles = await db
+      .select({
+        id: storyArticles.id,
+        storyId: storyArticles.storyId,
+        sourceSnippet: storyArticles.sourceSnippet,
+        article: articles,
+        source: sources,
+      })
+      .from(storyArticles)
+      .innerJoin(articles, eq(storyArticles.articleId, articles.id))
+      .innerJoin(sources, eq(articles.sourceId, sources.id))
+      .where(inArray(storyArticles.storyId, storyIds));
+
+    return fetchedStories.map(story => ({
+      ...story,
+      storyArticles: linkedArticles
+        .filter(la => la.storyId === story.id)
+        .map(la => ({ id: la.id, sourceSnippet: la.sourceSnippet, article: { ...la.article, source: la.source } })),
+    }));
   }
 
   async createContactSubmission(data: InsertContact): Promise<ContactSubmission> {

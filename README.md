@@ -66,8 +66,16 @@ Instead of reading one outlet's take, The Meridian shows you what multiple sourc
 - Sidebar conflict list for keyboard-accessible navigation
 - WCAG 2.1 AA compliant with semantic HTML, ARIA landmarks, and visible focus indicators
 
+### Search & Discovery
+- Full-text search across story headlines and summaries
+- Trending stories section highlighting the most-covered topics
+- Related stories linked from each story detail page
+- Bookmark/save stories for later reading (requires sign-in)
+- Saved Stories page (`/saved`) for quick access to bookmarked content
+
 ### Authentication & Personalization
 - Custom email/password authentication with bcrypt hashing (12 rounds)
+- **OAuth social login** — Sign in with Google, Facebook, Apple, GitHub, or Microsoft via Passport.js
 - Session-based auth with PostgreSQL session store
 - Forgot/reset password flow with time-limited tokens
 - Post-signup onboarding modal for topic preferences and digest frequency
@@ -266,7 +274,17 @@ npm start
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `GET` | `/api/stories` | List published stories (supports pagination, region filter) |
+| `GET` | `/api/stories/search` | Search stories by query string |
+| `GET` | `/api/stories/trending` | Get trending stories by source coverage |
 | `GET` | `/api/stories/:id` | Get story detail with linked articles and source info |
+| `GET` | `/api/stories/:id/related` | Get related stories for a given story |
+
+### Bookmarks
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/bookmarks` | List user's bookmarked stories |
+| `POST` | `/api/bookmarks/:storyId` | Bookmark a story |
+| `DELETE` | `/api/bookmarks/:storyId` | Remove a bookmark |
 
 ### Sources
 | Method | Endpoint | Description |
@@ -300,6 +318,7 @@ npm start
 | `/feed` | Feed | Full story listing with topic and edition filters |
 | `/story/:id` | Story Detail | Complete story with sources, divergence, and analysis |
 | `/conflicts` | Conflict Map | Interactive geopolitical conflict visualization |
+| `/saved` | Saved Stories | User's bookmarked stories (requires sign-in) |
 | `/sources` | Sources Index | Browse all 88 news sources by bias rating |
 | `/methodology` | Methodology | How the AI pipeline and neutrality engine work |
 | `/admin` | Admin Dashboard | Pipeline control, contact submissions, monitoring |

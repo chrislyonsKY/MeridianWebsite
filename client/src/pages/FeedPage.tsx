@@ -1,10 +1,12 @@
 import { useState } from "react";
+import { Link } from "wouter";
 import { useStories } from "@/hooks/use-stories";
 import { useQuery } from "@tanstack/react-query";
 import { StoryCard } from "@/components/StoryCard";
 import { Button } from "@/components/ui/button";
-import { Loader2, MapPin, ExternalLink } from "lucide-react";
+import { Loader2, MapPin, ExternalLink, Flame, ArrowRight, Layers } from "lucide-react";
 import { useEdition } from "@/components/EditionSelector";
+import type { StoryResponse } from "@shared/routes";
 
 interface LocalArticle {
   title: string;
@@ -39,9 +41,56 @@ export default function FeedPage() {
     enabled: !!location && location.length > 0,
   });
 
+  const { data: trendingData } = useQuery<{ stories: StoryResponse[] }>({
+    queryKey: ["/api/stories/trending"],
+    queryFn: async () => {
+      const res = await fetch("/api/stories/trending?limit=6", { credentials: "include" });
+      if (!res.ok) return { stories: [] };
+      return res.json();
+    },
+  });
+
   return (
     <div className="min-h-screen bg-background pt-8 pb-24">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+
+        {trendingData && trendingData.stories.length > 0 && (
+          <div className="mb-12" data-testid="trending-banner">
+            <div className="flex items-center gap-2 mb-5">
+              <Flame className="w-5 h-5 text-orange-500" />
+              <h2 className="font-serif text-xl font-bold text-foreground uppercase tracking-wider">Trending</h2>
+              <div className="flex-1 border-t border-border/50 ml-3" />
+            </div>
+            <div className="flex gap-4 overflow-x-auto pb-3 -mx-1 px-1 scrollbar-thin">
+              {trendingData.stories.map((story) => {
+                const sourceCount = story.storyArticles?.length || 0;
+                return (
+                  <Link
+                    key={story.id}
+                    href={`/story/${story.id}`}
+                    className="group flex-shrink-0 w-72 bg-card border border-border/60 hover:border-foreground/30 p-5 transition-all cursor-pointer"
+                    data-testid={`trending-story-${story.id}`}
+                  >
+                    <div className="flex items-center gap-2 mb-2">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-orange-500">{story.topic}</span>
+                      <span className="flex items-center gap-1 text-[10px] text-muted-foreground ml-auto">
+                        <Layers className="w-3 h-3" />
+                        {sourceCount}
+                      </span>
+                    </div>
+                    <h3 className="font-serif text-sm font-bold leading-snug text-foreground line-clamp-3 group-hover:text-primary/80 transition-colors mb-3">
+                      {story.headline}
+                    </h3>
+                    <div className="flex items-center text-[10px] text-muted-foreground gap-1 group-hover:text-foreground transition-colors">
+                      <span>Read more</span>
+                      <ArrowRight className="w-3 h-3" />
+                    </div>
+                  </Link>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         {localNews && localNews.articles.length > 0 && (
           <div className="mb-12 border border-border bg-card p-6" data-testid="local-news-section">

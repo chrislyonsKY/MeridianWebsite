@@ -19,6 +19,7 @@ export const users = pgTable("users", {
   profileImageUrl: varchar("profile_image_url"),
   passwordHash: varchar("password_hash"),
   authProvider: varchar("auth_provider", { length: 20 }).default("email").notNull(),
+  oauthProviderId: varchar("oauth_provider_id"),
   topicPreferences: text("topic_preferences").array(),
   digestFrequency: varchar("digest_frequency", { length: 20 }),
   onboardingCompleted: boolean("onboarding_completed").default(false).notNull(),

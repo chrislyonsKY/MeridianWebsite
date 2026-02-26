@@ -49,6 +49,9 @@ const IGNORE_PATTERNS = [
   '.local',
   '/tmp',
   'package-lock.json',
+  '.agents',
+  'references',
+  'attached_assets',
 ];
 
 function shouldIgnore(filePath: string): boolean {
@@ -75,11 +78,45 @@ function getAllFiles(dirPath: string, basePath: string = dirPath): string[] {
   return files;
 }
 
+function sleep(ms: number) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function createBlobWithRetry(
+  octokit: Octokit,
+  owner: string,
+  repo: string,
+  content: string,
+  retries = 3
+): Promise<string> {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      const blob = await octokit.git.createBlob({
+        owner,
+        repo,
+        content,
+        encoding: 'base64',
+      });
+      return blob.data.sha;
+    } catch (e: any) {
+      if (e.status === 403 && attempt < retries) {
+        const waitTime = attempt * 30000;
+        console.log(`\nRate limited, waiting ${waitTime / 1000}s before retry ${attempt}/${retries}...`);
+        await sleep(waitTime);
+      } else {
+        throw e;
+      }
+    }
+  }
+  throw new Error('Failed after retries');
+}
+
 async function main() {
   const repoFullName = process.argv[2];
+  const commitMessage = process.argv[3] || 'Update: The Meridian';
   if (!repoFullName || !repoFullName.includes('/')) {
-    console.error('Usage: npx tsx script/push-to-github.ts owner/repo');
-    console.error('Example: npx tsx script/push-to-github.ts myuser/the-meridian');
+    console.error('Usage: npx tsx script/push-to-github.ts owner/repo ["commit message"]');
+    console.error('Example: npx tsx script/push-to-github.ts myuser/the-meridian "Add new features"');
     process.exit(1);
   }
 
@@ -89,7 +126,6 @@ async function main() {
 
   console.log(`Pushing to ${owner}/${repo}...`);
 
-  // Check if repo exists, create if not
   try {
     await octokit.repos.get({ owner, repo });
     console.log('Repository found.');
@@ -107,10 +143,11 @@ async function main() {
     }
   }
 
-  // For empty repos, we need to initialize with a single file first via the Contents API
   let repoIsEmpty = false;
+  let parentSha: string | undefined;
   try {
-    await octokit.repos.getBranch({ owner, repo, branch: 'main' });
+    const branch = await octokit.repos.getBranch({ owner, repo, branch: 'main' });
+    parentSha = branch.data.commit.sha;
   } catch (e: any) {
     if (e.status === 404) {
       repoIsEmpty = true;
@@ -122,7 +159,6 @@ async function main() {
   console.log(`Found ${files.length} files to push.`);
 
   if (repoIsEmpty) {
-    // Initialize the repo with a README so git objects can be created
     console.log('Repository is empty, initializing with README...');
     await octokit.repos.createOrUpdateFileContents({
       owner,
@@ -131,52 +167,56 @@ async function main() {
       message: 'Initial commit',
       content: Buffer.from('# The Meridian\n\nNews, neutrally synthesized.\n').toString('base64'),
     });
+    const branch = await octokit.repos.getBranch({ owner, repo, branch: 'main' });
+    parentSha = branch.data.commit.sha;
     console.log('Repository initialized.');
   }
 
-  // Create blobs for all files
   const blobs: { path: string; sha: string; mode: string; type: string }[] = [];
+  const BATCH_SIZE = 15;
 
-  for (const file of files) {
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i];
     const fullPath = path.join(projectDir, file);
     const content = fs.readFileSync(fullPath);
     const base64Content = content.toString('base64');
 
-    const blob = await octokit.git.createBlob({
-      owner,
-      repo,
-      content: base64Content,
-      encoding: 'base64',
-    });
+    const sha = await createBlobWithRetry(octokit, owner, repo, base64Content);
 
     blobs.push({
       path: file,
-      sha: blob.data.sha,
+      sha,
       mode: '100644',
       type: 'blob',
     });
 
     process.stdout.write('.');
-  }
-  console.log('\nBlobs created.');
 
-  // Create tree
+    if ((i + 1) % BATCH_SIZE === 0 && i < files.length - 1) {
+      await sleep(1000);
+    }
+  }
+  console.log(`\n${blobs.length} blobs created.`);
+
+  const baseTree = parentSha
+    ? (await octokit.git.getCommit({ owner, repo, commit_sha: parentSha })).data.tree.sha
+    : undefined;
+
   const tree = await octokit.git.createTree({
     owner,
     repo,
     tree: blobs as any,
+    base_tree: baseTree,
   });
 
-  // Create commit
   const commit = await octokit.git.createCommit({
     owner,
     repo,
-    message: 'Initial commit: The Meridian - News, neutrally synthesized',
+    message: commitMessage,
     tree: tree.data.sha,
-    parents: [],
+    parents: parentSha ? [parentSha] : [],
   });
 
-  // Update main branch ref
   try {
     await octokit.git.updateRef({
       owner,

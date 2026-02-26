@@ -6,7 +6,58 @@ import type { StoryResponse } from "@shared/routes";
 import { MapContainer, TileLayer, CircleMarker, Popup, useMap, useMapEvents } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
-import { ChevronRight, X, AlertTriangle, ArrowUpDown, Filter, MapPin } from "lucide-react";
+import { ChevronRight, X, AlertTriangle, ArrowUpDown, Filter, MapPin, Layers } from "lucide-react";
+
+type BasemapStyle = "dark-gray" | "imagery" | "topographic" | "streets" | "navigation" | "oceans";
+
+const ESRI_BASEMAPS: Array<{
+  id: BasemapStyle;
+  label: string;
+  baseUrl: string;
+  refUrl?: string;
+  bg: string;
+}> = [
+  {
+    id: "dark-gray",
+    label: "Dark Gray",
+    baseUrl: "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}",
+    refUrl: "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}",
+    bg: "#1c1a16",
+  },
+  {
+    id: "imagery",
+    label: "Satellite",
+    baseUrl: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+    refUrl: "https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}",
+    bg: "#0a1628",
+  },
+  {
+    id: "topographic",
+    label: "Topographic",
+    baseUrl: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}",
+    bg: "#d9d4c6",
+  },
+  {
+    id: "streets",
+    label: "Streets",
+    baseUrl: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}",
+    bg: "#e8e0d8",
+  },
+  {
+    id: "navigation",
+    label: "Navigation",
+    baseUrl: "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}",
+    refUrl: "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Reference/MapServer/tile/{z}/{y}/{x}",
+    bg: "#e4e1d9",
+  },
+  {
+    id: "oceans",
+    label: "Oceans",
+    baseUrl: "https://server.arcgisonline.com/ArcGIS/rest/services/Ocean/World_Ocean_Base/MapServer/tile/{z}/{y}/{x}",
+    refUrl: "https://server.arcgisonline.com/ArcGIS/rest/services/Ocean/World_Ocean_Reference/MapServer/tile/{z}/{y}/{x}",
+    bg: "#1a3a5c",
+  },
+];
 
 interface ConflictNode {
   story: StoryResponse;
@@ -547,6 +598,22 @@ export default function ConflictMapPage() {
   const [activeTopic, setActiveTopic] = useState("ALL");
   const [selectedNode, setSelectedNode] = useState<ConflictNode | null>(null);
   const [sortBy, setSortBy] = useState<"severity" | "sources" | "recent">("severity");
+  const [activeBasemap, setActiveBasemap] = useState<BasemapStyle>("dark-gray");
+  const [basemapMenuOpen, setBasemapMenuOpen] = useState(false);
+  const currentBasemap = useMemo(() => ESRI_BASEMAPS.find(b => b.id === activeBasemap) || ESRI_BASEMAPS[0], [activeBasemap]);
+  const isDarkBasemap = activeBasemap === "dark-gray" || activeBasemap === "imagery" || activeBasemap === "oceans";
+  const basemapMenuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!basemapMenuOpen) return;
+    function handleClickOutside(e: MouseEvent) {
+      if (basemapMenuRef.current && !basemapMenuRef.current.contains(e.target as Node)) {
+        setBasemapMenuOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [basemapMenuOpen]);
 
   const { data: mapConfig } = useQuery<{ esriApiKey: string }>({
     queryKey: ["/api/config/map"],
@@ -679,23 +746,67 @@ export default function ConflictMapPage() {
               zoom={2}
               minZoom={2}
               maxZoom={10}
-              style={{ height: "520px", width: "100%", background: "#1c1a16" }}
+              style={{ height: "520px", width: "100%", background: currentBasemap.bg }}
               zoomControl={true}
               attributionControl={true}
               className="conflict-leaflet-map"
               data-testid="leaflet-map"
             >
               <TileLayer
+                key={`base-${activeBasemap}`}
                 attribution='Tiles &copy; Esri &mdash; Esri, DeLorme, NAVTEQ'
-                url={`https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}${esriApiKey ? `?token=${esriApiKey}` : ""}`}
+                url={`${currentBasemap.baseUrl}${esriApiKey ? `?token=${esriApiKey}` : ""}`}
               />
-              <TileLayer
-                url={`https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}${esriApiKey ? `?token=${esriApiKey}` : ""}`}
-                pane="overlayPane"
-              />
+              {currentBasemap.refUrl && (
+                <TileLayer
+                  key={`ref-${activeBasemap}`}
+                  url={`${currentBasemap.refUrl}${esriApiKey ? `?token=${esriApiKey}` : ""}`}
+                  pane="overlayPane"
+                />
+              )}
               <ScaleMarkers nodes={conflictNodes} selectedId={selectedNode?.story.id ?? null} onSelect={setSelectedNode} />
               <FlyToSelected selectedNode={selectedNode} />
             </MapContainer>
+
+            <div className="absolute top-3 right-3 z-[1000]" data-testid="basemap-switcher" ref={basemapMenuRef}>
+              <div className="relative">
+                <button
+                  onClick={() => setBasemapMenuOpen(!basemapMenuOpen)}
+                  className="flex items-center gap-1.5 bg-card/90 backdrop-blur-sm border border-border rounded-sm px-2.5 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground hover:text-foreground hover:bg-card transition-colors min-h-[36px]"
+                  aria-label="Change basemap style"
+                  aria-expanded={basemapMenuOpen}
+                  data-testid="basemap-toggle-btn"
+                >
+                  <Layers className="w-3.5 h-3.5" />
+                  <span>{currentBasemap.label}</span>
+                </button>
+                {basemapMenuOpen && (
+                  <div className="absolute top-full right-0 mt-1 bg-card/95 backdrop-blur-sm border border-border rounded-sm shadow-lg overflow-hidden min-w-[140px]" role="listbox" aria-label="Basemap styles">
+                    {ESRI_BASEMAPS.map((bm) => (
+                      <button
+                        key={bm.id}
+                        role="option"
+                        aria-selected={bm.id === activeBasemap}
+                        onClick={() => { setActiveBasemap(bm.id); setBasemapMenuOpen(false); }}
+                        className={`w-full text-left px-3 py-2 text-xs font-medium transition-colors min-h-[36px] flex items-center gap-2 ${
+                          bm.id === activeBasemap
+                            ? "bg-primary/10 text-primary"
+                            : "text-muted-foreground hover:text-foreground hover:bg-accent/50"
+                        }`}
+                        data-testid={`basemap-option-${bm.id}`}
+                      >
+                        <span
+                          className="w-3 h-3 rounded-sm border border-border/50 flex-shrink-0"
+                          style={{ backgroundColor: bm.bg }}
+                          aria-hidden="true"
+                        />
+                        {bm.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
 
             <div className="absolute bottom-10 right-3 z-[1000]" data-testid="severity-legend" role="img" aria-label="Legend: Critical (red), High (orange), Moderate (amber), Low (violet) divergence levels">
               <div className="bg-card/90 backdrop-blur-sm border border-border rounded-sm px-3 py-2.5">

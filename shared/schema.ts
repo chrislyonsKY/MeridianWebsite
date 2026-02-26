@@ -79,6 +79,13 @@ export const storyArticlesRelations = relations(storyArticles, ({ one }) => ({
   }),
 }));
 
+export const bookmarks = pgTable("bookmarks", {
+  id: serial("id").primaryKey(),
+  userId: varchar("user_id").notNull(),
+  storyId: integer("story_id").references(() => stories.id, { onDelete: 'cascade' }).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
 export const contactSubmissions = pgTable("contact_submissions", {
   id: serial("id").primaryKey(),
   name: text("name").notNull(),
@@ -112,6 +119,13 @@ export type Article = typeof articles.$inferSelect;
 
 export type InsertStory = z.infer<typeof insertStorySchema>;
 export type Story = typeof stories.$inferSelect;
+
+export const insertBookmarkSchema = createInsertSchema(bookmarks).omit({
+  id: true,
+  createdAt: true,
+});
+export type InsertBookmark = z.infer<typeof insertBookmarkSchema>;
+export type Bookmark = typeof bookmarks.$inferSelect;
 
 export const insertContactSchema = createInsertSchema(contactSubmissions).omit({
   id: true,

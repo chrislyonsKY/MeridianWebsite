@@ -2,7 +2,14 @@ import { Link } from "wouter";
 import { formatDistanceToNow } from "date-fns";
 import type { StoryResponse } from "@shared/routes";
 import { BiasBadge } from "./ui/BiasBadge";
-import { ArrowRight, Clock, Layers } from "lucide-react";
+import { ArrowRight, Clock, Layers, Bookmark } from "lucide-react";
+import { useBookmarks } from "@/hooks/use-bookmarks";
+import { useAuth } from "@/hooks/use-auth";
+
+function getReadingTime(text: string): number {
+  const words = text.trim().split(/\s+/).length;
+  return Math.max(1, Math.round(words / 200));
+}
 
 interface StoryCardProps {
   story: StoryResponse;
@@ -35,6 +42,8 @@ function MiniConsensus({ score }: { score: number }) {
 }
 
 export function StoryCard({ story }: StoryCardProps) {
+  const { isAuthenticated } = useAuth();
+  const { isBookmarked, toggleBookmark, isStoryPending } = useBookmarks();
   const uniqueSources = Array.from(
     new Map(
       story.storyArticles?.map((sa) => [sa.article.source.id, sa.article.source])
@@ -43,9 +52,22 @@ export function StoryCard({ story }: StoryCardProps) {
 
   const publishedDate = story.publishedAt ? new Date(story.publishedAt) : new Date(story.createdAt);
   const consensusScore = (story as any).consensusScore as number | null;
+  const readingTime = getReadingTime([story.summary || "", ...(story as any).keyFacts || []].join(" "));
+  const bookmarked = isBookmarked(story.id);
 
   return (
-    <div className="group flex flex-col justify-between bg-card border border-border/60 hover:border-foreground/30 transition-all duration-300 overflow-hidden" data-testid={`card-story-${story.id}`}>
+    <div className="group relative flex flex-col justify-between bg-card border border-border/60 hover:border-foreground/30 transition-all duration-300 overflow-hidden" data-testid={`card-story-${story.id}`}>
+      {isAuthenticated && (
+        <button
+          onClick={(e) => { e.preventDefault(); e.stopPropagation(); toggleBookmark(story.id); }}
+          disabled={isStoryPending(story.id)}
+          className={`absolute top-4 right-4 z-10 p-1.5 rounded-full transition-colors disabled:opacity-50 ${bookmarked ? "text-primary bg-primary/10" : "text-muted-foreground/50 hover:text-foreground hover:bg-muted"}`}
+          data-testid={`bookmark-btn-${story.id}`}
+          aria-label={bookmarked ? "Remove bookmark" : "Bookmark story"}
+        >
+          <Bookmark className={`w-4 h-4 ${bookmarked ? "fill-current" : ""}`} />
+        </button>
+      )}
       <Link href={`/story/${story.id}`} className="flex flex-col flex-grow p-6 sm:p-8 cursor-pointer">
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-3">
@@ -56,9 +78,12 @@ export function StoryCard({ story }: StoryCardProps) {
               <MiniConsensus score={consensusScore} />
             )}
           </div>
-          <div className="flex items-center text-xs text-muted-foreground">
-            <Clock className="w-3 h-3 mr-1" />
-            {formatDistanceToNow(publishedDate, { addSuffix: true })}
+          <div className="flex items-center gap-3 text-xs text-muted-foreground">
+            <span data-testid={`reading-time-${story.id}`}>{readingTime} min read</span>
+            <span className="flex items-center">
+              <Clock className="w-3 h-3 mr-1" />
+              {formatDistanceToNow(publishedDate, { addSuffix: true })}
+            </span>
           </div>
         </div>
 
