@@ -21,6 +21,7 @@
   <a href="#"><img src="https://img.shields.io/badge/WCAG-2.1_AA-green?style=flat-square" alt="WCAG 2.1 AA"></a>
   <a href="#"><img src="https://img.shields.io/badge/News_Sources-88-blue?style=flat-square" alt="News Sources"></a>
 </p>
+![Status: Development](https://img.shields.io/badge/Status-Development-yellow?style=flat-square)
 
 ---
 
